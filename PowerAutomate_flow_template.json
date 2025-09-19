@@ -1,0 +1,172 @@
+{
+  "flow_name": "Onboarding - CreateUser and AssignLicense (Template)",
+  "description": "Template JSON describing a Power Automate flow that receives Forms submission, calls Azure Automation runbook webhooks in sequence, and posts to Teams including file attachment. Replace webhook URLs and connectors as needed before importing manually.",
+  "version": "1.0",
+  "placeholders": {
+    "webhook_CreateUniqueUserID": "<PASTE_CREATEUNIQUEUSERID_WEBHOOK_URL>",
+    "webhook_CreateUser": "<PASTE_CREATEUSER_WEBHOOK_URL>",
+    "webhook_CheckAndAssignLicense": "<PASTE_CHECKANDASSIGNLICENSE_WEBHOOK_URL>",
+    "webhook_CreateOrEnsureGroup": "<PASTE_CREATEORENSUREGROUP_WEBHOOK_URL>",
+    "webhook_AddGroupMembers": "<PASTE_ADDGROUPMEMBERS_WEBHOOK_URL>",
+    "webhook_AssignSendAs": "<PASTE_ASSIGNSENDAS_WEBHOOK_URL>",
+    "domain": "<yourdomain.com>",
+    "accounts_group_displayName": "Accounts Team 1",
+    "will_upn": "will@yourdomain.com",
+    "chai_upn": "chai@yourdomain.com"
+  },
+  "steps": [
+    {
+      "step": 1,
+      "name": "Trigger - When a new response is submitted",
+      "type": "MicrosoftForms",
+      "action": "Get response details for the form",
+      "outputs": [
+        "FirstName",
+        "LastName",
+        "ManagerUPN",
+        "ManagerAdminUPN",
+        "AttachmentLink",
+        "SubmitterEmail"
+      ]
+    },
+    {
+      "step": 2,
+      "name": "Create Unique User ID",
+      "type": "HTTP",
+      "action": "POST to CreateUniqueUserID webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_CREATEUNIQUEUSERID_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "FirstName": "@{body('Get_response_details')?['FirstName']}",
+          "LastName": "@{body('Get_response_details')?['LastName']}",
+          "Domain": "<yourdomain.com>"
+        }
+      },
+      "expected_response": {
+        "UniqueID": "string",
+        "UPN": "string"
+      }
+    },
+    {
+      "step": 3,
+      "name": "Create Azure AD user",
+      "type": "HTTP",
+      "action": "POST to CreateUser webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_CREATEUSER_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "UPN": "@{body('Create Unique User ID')?['UPN']}",
+          "DisplayName": "@{concat(body('Get_response_details')?['FirstName'],' ',body('Get_response_details')?['LastName'])}",
+          "GivenName": "@{body('Get_response_details')?['FirstName']}",
+          "Surname": "@{body('Get_response_details')?['LastName']}"
+        }
+      },
+      "expected_response": {
+        "success": true,
+        "userId": "guid"
+      }
+    },
+    {
+      "step": 4,
+      "name": "Check and assign license",
+      "type": "HTTP",
+      "action": "POST to CheckAndAssignLicense webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_CHECKANDASSIGNLICENSE_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "UPN": "@{body('Create Azure AD user')?['userId'] != null ? body('Create Unique User ID')?['UPN'] : '' }",
+          "SkuSearch": "BUSINESS_BASIC"
+        }
+      },
+      "on_success": "continue",
+      "on_failure": "Post to Teams and terminate flow"
+    },
+    {
+      "step": 5,
+      "name": "Ensure Accounts Team 1 group",
+      "type": "HTTP",
+      "action": "POST to CreateOrEnsureGroup webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_CREATEORENSUREGROUP_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "GroupName": "Accounts Team 1"
+        }
+      },
+      "expected_response": {
+        "groupId": "guid"
+      }
+    },
+    {
+      "step": 6,
+      "name": "Add manager and admin to group",
+      "type": "HTTP",
+      "action": "POST to AddGroupMembers webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_ADDGROUPMEMBERS_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "GroupId": "@{body('Ensure Accounts Team 1 group')?['groupId']}",
+          "MemberUPNs": [
+            "@{body('Get_response_details')?['ManagerUPN']}",
+            "@{body('Get_response_details')?['ManagerAdminUPN']}"
+          ]
+        }
+      }
+    },
+    {
+      "step": 7,
+      "name": "Assign Send-As permission to group",
+      "type": "HTTP",
+      "action": "POST to AssignSendAs webhook",
+      "request": {
+        "method": "POST",
+        "url": "<PASTE_ASSIGNSENDAS_WEBHOOK_URL>",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "MailboxUPN": "@{body('Create Unique User ID')?['UPN']}",
+          "GroupIdentifier": "Accounts Team 1"
+        }
+      },
+      "notes": "Add Do-until or Delay loop to wait for mailbox provisioning (60-120s) before assigning SendAs."
+    },
+    {
+      "step": 8,
+      "name": "Handle Attachment and Post to Teams",
+      "type": "Teams+OneDrive",
+      "action": "Get file content (OneDrive) -> Create file in Team SharePoint -> Post message in Channel with link and submitter info",
+      "notes": [
+        "Use 'Get file content using path' with Attachment link from Forms",
+        "Create file in Team channel's folder (so it appears in Files)",
+        "Post message and include link using 'Post message in a channel' action"
+      ]
+    },
+    {
+      "step": 9,
+      "name": "Final notification",
+      "type": "Email/Teams",
+      "action": "Send success/failure notification to submitter and IT Ops"
+    }
+  ],
+  "notes": "This JSON is a template spec for Power Automate. Paste webhook URLs in placeholders and create the flow manually or use this as a mapping when building an importable flow. For any step using HTTP webhook, use 'Parse JSON' after the HTTP action with a sample response to extract fields."
+}
